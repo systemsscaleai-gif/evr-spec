@@ -1,3 +1,190 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://echocody.ai/evr-schema.json", "title": "EVR Core Schema", "version": "1.1.0"}
+  "$id": "https://echocody.ai/evr-schema.json",
+  "title": "EVR Core Schema",
+  "version": "1.1.0",
+  "description": "EchoCody Verified Receipt. An open evidence format connecting a governed customer conversation to its outcome, ownership, deadline and CRM writeback state.",
+  "type": "object",
+  "required": [
+    "evr_version",
+    "receipt_id",
+    "disposition",
+    "next_action",
+    "owner",
+    "due_at",
+    "reason",
+    "language",
+    "writeback_status",
+    "issued_at",
+    "integrity"
+  ],
+  "properties": {
+    "evr_version": {
+      "enum": [
+        "1.0.0",
+        "1.1.0"
+      ],
+      "description": "EVR Core version used by this receipt"
+    },
+    "handled_by": {
+      "type": "string",
+      "enum": [
+        "ai",
+        "human",
+        "hybrid"
+      ],
+      "description": "Who handled the conversation: an AI agent, a person, or both. Same standard either way. Added in 1.1.0"
+    },
+    "receipt_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 160,
+      "description": "Stable receipt identifier"
+    },
+    "disposition": {
+      "type": "string",
+      "enum": [
+        "BOOKED",
+        "FOLLOW_UP_OWNED",
+        "ESCALATED",
+        "NO_CONVERSATION"
+      ]
+    },
+    "next_action": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "The single next step, written as an action"
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Named person or accountable operating role for the next action"
+    },
+    "due_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the next action is due, with timezone"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "description": Why the conversation ended in this disposition"
+    },
+    "language": {
+      "type": "string",
+      "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$",
+      "description": "BCP 47 language tag, for example en-US or es-US"
+    },
+    "writeback_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "written",
+        "failed"
+      ],
+      "description": "CRM write state, keep separate from the outcome"
+    },
+    "crm_record_url": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uri"
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "integrity": {
+      "type": "object",
+      "description": "Pointers that let an operator match the receipt to its source evidence without placing private evidence in the public format.",
+      "properties": {
+        "source_event_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "evidence_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-fA-F0-9]{64}$"
+        }
+      },
+      "required": [
+        "source_event_id",
+        "evidence_hash"
+      ],
+      "additionalProperties": false
+    },
+    "reversal": {
+      "type": "object",
+      "description": "Present when the named owner revoked or reversed the outcome",
+      "properties": {
+        "reversed_by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reversed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reversed_by",
+        "reversed_at",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "outbound": {
+      "type": "object",
+      "description": "EVR-Out extension. Required for an outbound AI or prerecorded call receipt.",
+      "properties": {
+        "consent_basis": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Evidence reference for the active consent grant"
+        },
+        "consent_scope": {
+          "const": "marketing_written"
+        },
+        "consent_channel": {
+          "const": "voice"
+        },
+        "disclosure_confirmed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": When the AI disclosure was spoken
+        },
+        "revoked_at"": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "consent_basis",
+        "consent_scope",
+        "consent_channel",
+        "disclosure_confirmed_at",
+        "revoked_at""
+      ],
+      "additionalProperties": false
+    },
+    "extensions": {
+      "type": "object",
+      "description":"Namespaced extension fields for a trade or connected system",
+      "additionalProperties": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": false
+}
