@@ -1,0 +1,18 @@
+{
+  "evr_version": "1.1.0",
+  "handled_by": "ai",
+  "receipt_id": "evr_example_0001",
+  "disposition": "BOOKED",
+  "next_action": "Confirm the water heater inspection with the customer",
+  "owner": "Dispatch",
+  "due_at": "2026-10-06T09:00:00-06:00",
+  "reason": "Caller asked for an inspection and accepted the first open slot",
+  "language": "es-US",
+  "writeback_status": "written",
+  "crm_record_url": null,
+  "issued_at": "2026-10-05T14:20:00-06:00",
+  "integrity": {
+    "source_event_id": "example-conversation-0001",
+    "evidence_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}
