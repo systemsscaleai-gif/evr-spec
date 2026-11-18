@@ -1,0 +1,13 @@
+{
+  "standard": "North Star Verified",
+  "source": "https://northstarintel.ai/api/public/receipt-keys",
+  "keys": [
+    {
+      "key_id": "nsv-kmw0ik5mg",
+      "public_key": "x3ZqpDf9fmy9NNa6jAftGMCYMQDY6jcT0rjTjqYzEpg=",
+      "algorithm": "Ed25519",
+      "created_at": "2026-11-03T09:56:58.4303+00:00",
+      "retired_at": null
+    }
+  ]
+}
