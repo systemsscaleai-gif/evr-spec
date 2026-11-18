@@ -1,0 +1,140 @@
+// The outside witness recorder for North Star Verified receipts.
+//
+// It runs on a schedule in a PUBLIC repository that the North Star site does
+// not control at run time (see witness/README.md). Each run reads two public
+// addresses on the site and appends one line to witness/log.jsonl:
+//
+//   - the fingerprint of the newest seal in the chain, and
+//   - the fingerprints of receipts on the public register that the log has not
+//     listed before.
+//
+// It also keeps a copy of the published signing keys in witness/receipt-keys.json.
+// Fingerprints, receipt IDs and public keys only. Nothing private can reach
+// this file, because the site's public addresses never serve it.
+//
+// Node 20 or newer. No dependencies.
+
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import { pathToFileURL } from "node:url";
+
+export const LOG_VERSION = 1;
+// One run reads the whole public register, a page at a time. The site names the
+// next page. A register too long for this many pages stops the run with an
+// error instead of logging part of it: raise the number (the site allows 120
+// reads an hour from one address).
+export const MAX_PAGES = 40;
+const SHA256 = /^[0-9a-f]{64}$/;
+const SEAL_ID = /^NSV-\d{4}-[0-9A-HJKMNP-TV-Z]{6}$/;
+
+const isRecord = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+
+/** The receipt IDs the log already lists. Lines that do not parse are ignored. */
+export function loggedReceiptIds(logText) {
+  const ids = new Set();
+  for (const line of logText.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      for (const receipt of Array.isArray(entry?.published) ? entry.published : []) if (typeof receipt?.id === "string") ids.add(receipt.id);
+    } catch { /* a damaged line never stops the recorder */ }
+  }
+  return ids;
+}
+
+/** One page of the chain endpoint, or an Error naming what was wrong with it. Nothing malformed is ever logged. */
+export function readChainPage(body) {
+  if (!isRecord(body) || body.standard !== "North Star Verified") throw new Error("the chain answer is not a North Star Verified answer");
+  const head = body.head_sha256 ?? null;
+  if (head !== null && !(typeof head === "string" && SHA256.test(head))) throw new Error("the newest seal fingerprint is malformed");
+  if (!Array.isArray(body.published)) throw new Error("the register page is missing");
+  const next = body.next_offset;
+  if (next !== null && !(Number.isInteger(next) && next > 0 && next <= 100000)) throw new Error("the next page is not named");
+  const published = body.published.map((receipt) => {
+    if (!isRecord(receipt) || typeof receipt.id !== "string" || !SEAL_ID.test(receipt.id) || typeof receipt.payload_sha256 !== "string" || !SHA256.test(receipt.payload_sha256)) {
+      throw new Error("a register receipt is malformed");
+    }
+    return { id: receipt.id, payload_sha256: receipt.payload_sha256 };
+  });
+  return { head_sha256: head, published, next_offset: next };
+}
+
+/** Sorted-key JSON, so the same key list always has the same fingerprint. */
+export function canonical(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+}
+
+export const sha256 = (text) => createHash("sha256").update(text, "utf8").digest("hex");
+
+/** The published keys as the site lists them, or an Error. */
+export function readKeys(body) {
+  if (!isRecord(body) || !Array.isArray(body.keys) || !body.keys.length) throw new Error("the key list is missing or empty");
+  return body.keys.map((key) => {
+    if (!isRecord(key) || typeof key.key_id !== "string" || typeof key.public_key !== "string") throw new Error("a published key is malformed");
+    return { key_id: key.key_id, public_key: key.public_key, algorithm: typeof key.algorithm === "string" ? key.algorithm : null, created_at: typeof key.created_at === "string" ? key.created_at : null, retired_at: typeof key.retired_at === "string" ? key.retired_at : null };
+  });
+}
+
+/**
+ * The line this run appends. `observedAt` is the recorder's own clock, never a
+ * time the site supplied: the recorder is the witness.
+ */
+export function nextEntry({ logText, pages, keys, observedAt, source }) {
+  const known = loggedReceiptIds(logText);
+  const fresh = [];
+  for (const page of pages) {
+    for (const receipt of page.published) {
+      if (known.has(receipt.id)) continue;
+      known.add(receipt.id);
+      fresh.push(receipt);
+    }
+  }
+  return { v: LOG_VERSION, observed_at: observedAt, source, head_sha256: pages[0]?.head_sha256 ?? null, published: fresh, keys_sha256: sha256(canonical(keys)) };
+}
+
+async function getJson(url) {
+  const response = await fetch(url, { headers: { Accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(20_000) });
+  if (!response.ok) throw new Error(`${url} answered ${response.status}`);
+  return response.json();
+}
+
+/**
+ * Reads the whole public register, following the next page the site names.
+ *
+ * Every run reads every page. A receipt can join the register long after it was
+ * sealed, anywhere in the order, so stopping at the first page with nothing new
+ * would miss it for good.
+ */
+export async function readPages(source, get = getJson) {
+  const pages = [];
+  let offset = 0;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const read = readChainPage(await get(`${source}/api/public/receipt-chain?offset=${offset}`));
+    pages.push(read);
+    if (read.next_offset === null) return pages;
+    if (read.next_offset <= offset) throw new Error("the register pages do not move forward");
+    offset = read.next_offset;
+  }
+  throw new Error(`the public register is longer than ${MAX_PAGES} pages: raise MAX_PAGES in witness/record.mjs`);
+}
+
+export async function run({ source = "https://northstarintel.ai", logPath = "witness/log.jsonl", keysPath = "witness/receipt-keys.json", now = () => new Date(), get = getJson } = {}) {
+  const logText = await readFile(logPath, "utf8").catch(() => "");
+  const pages = await readPages(source, get);
+  const keys = readKeys(await get(`${source}/api/public/receipt-keys`));
+  const entry = nextEntry({ logText, pages, keys, observedAt: now().toISOString(), source });
+  await mkdir(dirname(logPath), { recursive: true });
+  await writeFile(logPath, `${logText}${logText && !logText.endsWith("\n") ? "\n" : ""}${JSON.stringify(entry)}\n`, "utf8");
+  await writeFile(keysPath, `${JSON.stringify({ standard: "North Star Verified", source: `${source}/api/public/receipt-keys`, keys }, null, 2)}\n`, "utf8");
+  return entry;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  run({ source: process.env.WITNESS_SOURCE || undefined }).then(
+    (entry) => console.log(`recorded: newest seal ${entry.head_sha256 ?? "none"}, ${entry.published.length} new public receipt(s)`),
+    (error) => { console.error(`not recorded: ${error instanceof Error ? error.message : error}`); process.exit(1); },
+  );
+}

@@ -1,0 +1,59 @@
+# Outside witness for North Star Verified receipts.
+#
+# Copy this file to .github/workflows/witness.yml in the PUBLIC witness
+# repository, together with witness/record.mjs. It needs no secret: it reads
+# two public addresses and commits to its own repository.
+#
+# Each run appends one line to witness/log.jsonl and refreshes
+# witness/receipt-keys.json. A failed run changes nothing and GitHub emails the
+# repository owner.
+name: Witness log
+
+on:
+  schedule:
+    - cron: "7 7 * * *" # once a day, 07:07 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: witness-log
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Record what the site publishes right now
+        run: node witness/record.mjs
+      # Optional second witness: an RFC 3161 timestamp over the whole log from an
+      # independent timestamp authority. Set the repository variable
+      # WITNESS_TSA_URL to turn it on. A stamp that fails or is refused is not
+      # kept and never stops the daily line. witness/README.md shows how to
+      # check a stamp.
+      - name: Timestamp the log with an independent authority
+        if: ${{ vars.WITNESS_TSA_URL != '' }}
+        continue-on-error: true
+        env:
+          TSA_URL: ${{ vars.WITNESS_TSA_URL }}
+        run: |
+          openssl ts -query -data witness/log.jsonl -sha256 -cert -out /tmp/log.tsq
+          curl --silent --show-error --fail --max-time 30 \
+            -H "Content-Type: application/timestamp-query" \
+            --data-binary @/tmp/log.tsq "$TSA_URL" -o /tmp/log.tsr
+          openssl ts -reply -in /tmp/log.tsr -text | grep -q "Status: Granted"
+          mkdir -p witness/timestamps
+          mv /tmp/log.tsr "witness/timestamps/$(date -u +%Y-%m-%dT%H%M%SZ).tsr"
+      - name: Commit
+        run: |
+          git config user.name "witness-log"
+          git config user.email "witness-log@users.noreply.github.com"
+          git add witness/log.jsonl witness/receipt-keys.json witness/timestamps 2>/dev/null || git add witness/log.jsonl witness/receipt-keys.json
+          git commit -m "Witness: $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push
