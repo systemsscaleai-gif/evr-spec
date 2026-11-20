@@ -71,7 +71,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 1000,
-      "description": Why the conversation ended in this disposition"
+      "description": "Why the conversation ended in this disposition"
     },
     "language": {
       "type": "string",
@@ -85,7 +85,7 @@
         "written",
         "failed"
       ],
-      "description": "CRM write state, keep separate from the outcome"
+      "description": "CRM write state, kept separate from the outcome"
     },
     "crm_record_url": {
       "type": [
@@ -159,9 +159,9 @@
         "disclosure_confirmed_at": {
           "type": "string",
           "format": "date-time",
-          "description": When the AI disclosure was spoken
+          "description": "When the AI disclosure was spoken"
         },
-        "revoked_at"": {
+        "revoked_at": {
           "type": [
             "string",
             "null"
@@ -174,13 +174,13 @@
         "consent_scope",
         "consent_channel",
         "disclosure_confirmed_at",
-        "revoked_at""
+        "revoked_at"
       ],
       "additionalProperties": false
     },
     "extensions": {
       "type": "object",
-      "description":"Namespaced extension fields for a trade or connected system",
+      "description": "Namespaced extension fields for a trade or connected system",
       "additionalProperties": {
         "type": "object"
       }
