@@ -6,7 +6,9 @@
 //
 //   - the fingerprint of the newest seal in the chain,
 //   - the fingerprints of receipts on the public register that the log has not
-//     listed before, and
+//     listed before,
+//   - the fingerprints of corrections on those receipts that the log has not
+//     listed before ("corrections"), and
 //   - the fingerprints of AI register versions sent to North Star for a date
 //     that the log has not listed before ("registers"). A fingerprint reveals
 //     nothing of what a register says.
@@ -34,6 +36,7 @@ export const MAX_REGISTER_PAGES = 40;
 export const REGISTER_STANDARD = "North Star AI Register dates";
 const SHA256 = /^[0-9a-f]{64}$/;
 const SEAL_ID = /^NSV-\d{4}-[0-9A-HJKMNP-TV-Z]{6}$/;
+const CORRECTION_ID = /^NSV-\d{4}-[0-9A-HJKMNP-TV-Z]{6}\/C[1-9]\d{0,3}$/;
 
 const isRecord = (value) => !!value && typeof value === "object" && !Array.isArray(value);
 
@@ -48,6 +51,25 @@ export function loggedReceiptIds(logText) {
     } catch { /* a damaged line never stops the recorder */ }
   }
   return ids;
+}
+
+/**
+ * The corrections the log already lists, as "<id> <fingerprint>". The fingerprint is part of
+ * the key on purpose: if the site ever serves a different fingerprint for a place the log
+ * already holds, the new one is logged too, and the two lines are the evidence of a rewrite.
+ */
+export function loggedCorrections(logText) {
+  const seen = new Set();
+  for (const line of logText.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      for (const correction of Array.isArray(entry?.corrections) ? entry.corrections : []) {
+        if (typeof correction?.id === "string" && typeof correction?.payload_sha256 === "string") seen.add(`${correction.id} ${correction.payload_sha256}`);
+      }
+    } catch { /* a damaged line never stops the recorder */ }
+  }
+  return seen;
 }
 
 /** The AI register fingerprints the log already lists. Lines that do not parse are ignored. */
@@ -90,7 +112,18 @@ export function readChainPage(body) {
     }
     return { id: receipt.id, payload_sha256: receipt.payload_sha256 };
   });
-  return { head_sha256: head, published, next_offset: next };
+  // No field means the site could not read its corrections this time (or predates them): "not read".
+  let corrections = null;
+  if (body.corrections !== undefined) {
+    if (!Array.isArray(body.corrections)) throw new Error("the corrections list is malformed");
+    corrections = body.corrections.map((correction) => {
+      if (!isRecord(correction) || typeof correction.id !== "string" || !CORRECTION_ID.test(correction.id) || typeof correction.payload_sha256 !== "string" || !SHA256.test(correction.payload_sha256)) {
+        throw new Error("a correction is malformed");
+      }
+      return { id: correction.id, payload_sha256: correction.payload_sha256 };
+    });
+  }
+  return { head_sha256: head, published, corrections, next_offset: next };
 }
 
 /** Sorted-key JSON, so the same key list always has the same fingerprint. */
@@ -118,6 +151,9 @@ export function readKeys(body) {
  * `registerPages` is null when the dated register feed could not be read: the
  * line then carries no "registers" field at all, so a reader can tell "not
  * read this run" (no field) from "read, nothing new" (an empty list).
+ *
+ * "corrections" follows the same rule: the field is written only when every
+ * page of the register carried its corrections list.
  */
 export function nextEntry({ logText, pages, keys, observedAt, source, registerPages = null }) {
   const known = loggedReceiptIds(logText);
@@ -130,6 +166,19 @@ export function nextEntry({ logText, pages, keys, observedAt, source, registerPa
     }
   }
   const entry = { v: LOG_VERSION, observed_at: observedAt, source, head_sha256: pages[0]?.head_sha256 ?? null, published: fresh };
+  if (pages.length && pages.every((page) => Array.isArray(page.corrections))) {
+    const seen = loggedCorrections(logText);
+    const corrections = [];
+    for (const page of pages) {
+      for (const correction of page.corrections) {
+        const key = `${correction.id} ${correction.payload_sha256}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        corrections.push(correction);
+      }
+    }
+    entry.corrections = corrections;
+  }
   if (registerPages !== null) {
     const seen = loggedRegisterFingerprints(logText);
     const registers = [];
@@ -208,7 +257,7 @@ export async function run({ source = "https://northstarintel.ai", logPath = "wit
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   run({ source: process.env.WITNESS_SOURCE || undefined }).then(
-    (entry) => console.log(`recorded: newest seal ${entry.head_sha256 ?? "none"}, ${entry.published.length} new public receipt(s), ${entry.registers ? `${entry.registers.length} new register fingerprint(s)` : "register dates not read"}`),
+    (entry) => console.log(`recorded: newest seal ${entry.head_sha256 ?? "none"}, ${entry.published.length} new public receipt(s), ${entry.corrections ? `${entry.corrections.length} new correction(s)` : "corrections not read"}, ${entry.registers ? `${entry.registers.length} new register fingerprint(s)` : "register dates not read"}`),
     (error) => { console.error(`not recorded: ${error instanceof Error ? error.message : error}`); process.exit(1); },
   );
 }
